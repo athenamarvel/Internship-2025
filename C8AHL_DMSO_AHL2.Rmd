@@ -1,0 +1,794 @@
+---
+title: "Menthe_cue_new"
+output: html_document
+date: "2025-05-22"
+---
+
+##load package
+```{r}
+library("readxl") # Load Excel tables
+library("ggplot2") # Data viz
+library("dplyr") # for data calculations
+library(tidyr)
+e4e4e4```
+
+##Data sframe loading
+
+```{r}
+folder_path <- "/Users/athena.marvel/Documents/Stage M1 2025/R data/C8"
+
+# Lister tous les fichiers CSV dans le dossier
+file_list <- list.files(path = folder_path, pattern = "\\.csv$", full.names = TRUE)
+
+# Lire et combiner tous les fichiers avec métadonnées extraites du nom de fichier
+data <- do.call(rbind, lapply(file_list, function(file) {
+  df <- read.csv(file)
+  
+  # Nettoyer le nom de fichier
+  filename <- tools::file_path_sans_ext(basename(file))  # Retire ".csv"
+  filename <- sub("_poseData$", "", filename)            # Retire "_poseData"
+  parts <- strsplit(filename, "_")[[1]]
+
+  # Vérification et ajout des colonnes
+  if (length(parts) == 5) {
+    df$species <- parts[1]
+    df$experiment <- parts[2]
+    df$treatment <- parts[3]
+    df$cue_side <- parts[4]
+    df$fish_replicate <- parts[5]
+  } else {
+    warning(paste("Nom de fichier inattendu :", filename))
+    df$species <- NA
+    df$experiment <- NA
+    df$treatment <- NA
+    df$cue_side <- NA
+    df$fish_replicate <- NA
+  }
+
+  return(df)
+}))
+
+dataF = data
+
+
+dataF$minute <- substr(dataF$time, 1, 2)
+
+dataF$secondeTEST <- substr(dataF$time, 4, 5)
+dataF$secsTEST <- substr(dataF$time, 7, 8)
+
+dataF$minute<- as.numeric(dataF$minute)
+dataF <- dataF %>%
+  mutate(secs = 60*as.numeric(minute) + as.numeric(secondeTEST) + as.numeric(secsTEST)*0.01)%>%
+  mutate(minute = minute +1)
+dataF <- dataF %>%
+  rename(fish = fish_replicate)
+
+
+dataF <- dataF %>%
+  mutate(cue_x = ifelse(cue_side == "Right", olf_x,1-olf_x))%>%
+  mutate(fishPositionLR = ifelse(olf_x < 0.5, 'Left', 'Right')) %>%  
+  mutate(fishPositionCue = ifelse(cue_x < 0.5, 'control', 'cue')) %>%
+  mutate(part = ifelse(secs >= 600, "After","Before"))%>%
+  mutate(part = factor(part, levels = c("Before", "After")))
+
+dataF <- dataF %>%
+  group_by(fish)%>%
+  mutate(max_frame = max(frame))%>%
+  mutate(timelag = ifelse(frame == 0, NA, 1200/max_frame))
+
+#write.csv(dataF, "dataF_AHL_DMSO.csv", row.names = FALSE)
+```
+
+## cheks
+```{r}
+duplicates <- dataF %>%
+  group_by(frame) %>%
+  filter(n() > 1) %>%
+  ungroup() 
+View(duplicates)
+```
+
+```{r}
+poissons <- unique(dataF$fish)
+
+# Créer une boucle pour générer un graphique pour chaque poisson
+for (poisson in poissons) {
+  
+  # Filtrer les données pour le poisson actuel
+  data_poisson <- dataF %>% filter(fish == poisson)
+  
+  treatement <- unique(data_poisson$treatment)
+  
+  # Déterminer la couleur du titre
+  couleur_titre <- ifelse(tolower(treatement) == "C8DMS0", "black", "red")
+  
+  
+  # Créer le graphique pour le poisson actuel
+  p <- ggplot(data_poisson, aes(x = secs, y = cue_x, color = part)) +
+    geom_rect(aes(xmin = 600, xmax = 1200, ymin = 0.5, ymax = 1), fill = "grey", alpha = 0.3) +
+    geom_point(size = 0.1) +  # Ajouter des points pour la vitesse moyenne
+    geom_line() +  # Ajouter une ligne pour relier les points
+    geom_abline(intercept = 50, slope = 0,linetype = "dashed", color ="red") +
+    scale_color_manual(values = c("Before" = "black", "After" = "red")) +
+    labs(title = paste("position in the flume", poisson),
+         x = "Time (sec)", 
+         y = "Vitesse Moyenne (px par sec)") +
+    scale_x_continuous(limits = c(0, 1200)) +
+    geom_abline(intercept = 0.5, slope = 0,linetype = "dashed", color ="red")+
+    theme(
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5, color = couleur_titre),
+      plot.background = element_rect(fill = "white"),
+      panel.background = element_rect(fill = "white"),
+      axis.line = element_line(color = "black", linewidth = 0.5),
+      axis.text.x = element_text(color = "black", size = 8),
+      axis.text.y = element_text(color = "black", size = 8)
+    )
+  
+  # Afficher le graphique
+  print(p)
+}
+
+dataF <- dataF %>%
+  filter(fish != "13")
+
+dataF <- dataF %>%
+  filter(fish != "13")
+```
+
+```{r}
+dataF <- dataF %>%
+  mutate(floorseconde = floor(secs)+1)
+
+meanSEC <- dataF %>%
+  group_by(part,treatment) %>%
+  summarise(
+    avg=mean(cue_x, na.rm=TRUE),
+    sd=sd(cue_x, na.rm=TRUE),
+    n=n()-sum(is.na(cue_x)),
+    se = sd / sqrt(n))
+
+ggplot(meanSEC, aes(x = minute, y = avg)) + # visualise time series
+  geom_line(aes(col = fish)) +
+  facet_wrap(treatment~fish) +
+  geom_vline(xintercept = 10, linetype = "dashed", color = "blue")+
+  geom_abline(intercept = 0.50, slope = 0,linetype = "dashed", color ="red")+
+  theme_classic()
+
+ggplot(meanSEC, aes(x = part, y = avg)) + # visualise time series
+  geom_point(aes(col =part)) +
+  facet_wrap(~treatment) +
+  geom_vline(xintercept = 10, linetype = "dashed", color = "blue")+
+  geom_abline(intercept = 0.50, slope = 0,linetype = "dashed", color ="red")+
+  scale_y_continuous(limits = c(0, 1)) +
+  theme_classic()
+```
+
+
+
+##calculs side pref
+```{r}
+removed_rows <- dataF %>%
+  filter(is.na(fishPositionLR))
+
+dataF <- dataF %>%
+  filter(!is.na(fishPositionLR))
+
+timesum1min <- dataF %>%
+  group_by(fish,minute,fishPositionLR,part,treatment) %>%
+  summarise(sum = sum(timelag,na.rm = TRUE))
+
+timesum1min <- timesum1min %>%
+  ungroup() %>%
+  complete(fish, minute, fishPositionLR,treatment, fill = list(sum = 0)) %>%
+  mutate(part = ifelse(minute >= 1 & minute <= 10, "Before", "After"))%>%
+  mutate(fish = as.numeric(fish)) %>%
+  filter(
+    (treatment == "C8DMS0" & fish < 21) |
+    (treatment == "C8AHL")
+  )
+
+
+dfside1min <- timesum1min %>%
+  group_by(fish, minute, part, treatment) %>%
+  mutate(total_sum = sum(sum)) 
+
+dfside1min <- dfside1min %>%
+  group_by(fish, minute, fishPositionLR,treatment) %>%
+  mutate(ratioside = ifelse(sum == 0, 0, 100 * sum / total_sum))
+
+dfside1min <- dfside1min %>%
+  filter(fishPositionLR == "Right")
+
+
+mean <- dfside1min %>%
+  group_by(part, minute,fishPositionLR,treatment) %>%
+  summarise(
+    avg=mean(ratioside, na.rm=TRUE),
+    sd=sd(ratioside, na.rm=TRUE),
+    n=n()-sum(is.na(ratioside)),
+    se = sd / sqrt(n))
+
+p <- ggplot()
+p <- p + geom_point(data = dfside1min,
+                    mapping = aes(x=minute, y=ratioside, fill= part),
+                    color="black", shape=21, size=1.5, alpha=0.3,
+                    position=position_jitterdodge(dodge.width=0.5, jitter.width = 0.1),
+                    na.rm = TRUE)+
+  scale_fill_manual(values = c("white", "lightblue"))
+p <- p + geom_point(data = mean,
+                    mapping = aes (x=minute, y=avg, fill= part),
+                    position = position_dodge(0.5),
+                    size=4, shape=21, color="black")
+p <- p + geom_errorbar(data = mean,
+                       mapping = aes(x=minute, ymin=avg-sd, ymax=avg+sd, group= part),
+                       width = 0.1,
+                       position = position_dodge(0.5),
+                       color="black")
+p <- p + geom_abline(intercept = 50, slope = 0,linetype = "dashed", color ="red")
+p <- p + labs(x ="Minutes", y = "Time one side %")
+p <- p + theme(
+  panel.border = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  axis.line = element_line(colour = "black"),
+  panel.background = element_blank(),
+  legend.position = "none",
+  axis.text.x=element_text(colour="black"),
+  axis.text.y=element_text(colour="black")
+)
+p <- p + facet_wrap(~treatment) 
+p
+```
+
+```{r}
+timecue1min <- dataF %>%
+  group_by(fish,minute,fishPositionCue,part,treatment) %>%
+  summarise(sum = sum(timelag,na.rm = TRUE))
+
+
+
+timecue1min <- timecue1min %>%
+  ungroup() %>%
+  complete(fish, minute, fishPositionCue,treatment, fill = list(sum = 0)) %>%
+  mutate(part = ifelse(minute >= 1 & minute <= 10, "Before", "After"))%>%
+  mutate(fish = as.numeric(fish)) %>%
+  filter(
+    (treatment == "C8DMS0" & fish < 21) |
+    (treatment == "C8AHL")
+  )
+
+
+dfcue1min <- timecue1min %>%
+  group_by(fish, minute, part,treatment) %>%
+  mutate(total_sum = sum(sum)) 
+dfcue1min <- dfcue1min %>%
+  group_by(fish, minute, fishPositionCue,treatment) %>%
+  mutate(ratioside = ifelse(sum == 0, 0, 100 * sum / total_sum))
+
+dfcue1min <- dfcue1min %>%
+  filter(fishPositionCue == "cue")
+
+meangraph <- dfcue1min %>%
+  group_by(fish,part, minute,fishPositionCue,treatment) %>%
+  summarise(
+    avg=mean(ratioside, na.rm=TRUE),
+    sd=sd(ratioside, na.rm=TRUE),
+    n=n()-sum(is.na(ratioside)),
+    se = sd / sqrt(n))
+
+ggplot(meangraph, aes(x = minute, y = avg)) + # visualise time series
+  geom_point(aes(col = part)) +
+  facet_wrap(treatment~fish) +
+  theme_classic()+ geom_abline(intercept = 50, slope = 0,linetype = "dashed", color ="red")
+
+
+mean <- dfcue1min %>%
+  group_by(part, minute,fishPositionCue,treatment) %>%
+  summarise(
+    avg=mean(ratioside, na.rm=TRUE),
+    sd=sd(ratioside, na.rm=TRUE),
+    n=n()-sum(is.na(ratioside)),
+    se = sd / sqrt(n))
+
+p <- ggplot()
+p <- p + geom_point(data = dfcue1min,
+                    mapping = aes(x=minute, y=ratioside, fill= part),
+                    color="black", shape=21, size=1.5, alpha=0.3,
+                    position=position_jitterdodge(dodge.width=0.5, jitter.width = 0.1),
+                    na.rm = TRUE)+
+  scale_fill_manual(values = c("white", "lightblue"))
+p <- p + geom_point(data = mean,
+                    mapping = aes (x=minute, y=avg, fill= part),
+                    position = position_dodge(0.5),
+                    size=4, shape=21, color="black")
+p <- p + geom_errorbar(data = mean,
+                       mapping = aes(x=minute, ymin=avg-sd, ymax=avg+sd, group= part),
+                       width = 0.1,
+                       position = position_dodge(0.5),
+                       color="black")
+p <- p + geom_abline(intercept = 50, slope = 0,linetype = "dashed", color ="red")
+p <- p + labs(x ="Minutes", y = "Time one side %")
+p <- p + theme(
+  panel.border = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  axis.line = element_line(colour = "black"),
+  panel.background = element_blank(),
+  legend.position = "none",
+  axis.text.x=element_text(colour="black"),
+  axis.text.y=element_text(colour="black")
+)
+p <- p + facet_wrap(~treatment) 
+p
+```
+
+
+```{r}
+timeside10min <- dataF %>%
+  group_by(fish,fishPositionLR,part,treatment) %>%
+  summarise(sum = sum(timelag,na.rm = TRUE))
+
+timecue10min <- dataF %>%
+  group_by(fish, fishPositionCue, part, cue_side, treatment) %>%
+  summarise(sum = sum(timelag, na.rm = TRUE), .groups = "drop") %>%  # optional: drop grouping
+  complete(fish, fishPositionCue, part, fill = list(sum = 0))
+
+
+#ajoute des 0s pour les lignes ou il n'y a pas de sum
+# J'ai aussi ajouté menthe aux nouvelles lignes 
+#timeside10min <- timeside10min %>%
+  #ungroup() %>%
+  #complete(fish, fishPositionLR,part, fill = list(sum = 0))
+
+dfside10min <- timeside10min %>%
+  group_by(fish, part,treatment) %>%
+  mutate(total_sum = sum(sum)) 
+
+dfside10min <- dfside10min %>%
+  group_by(fish, part, fishPositionLR,treatment) %>%
+  mutate(ratioside = ifelse(sum == 0, 0, 100 * sum / total_sum))
+
+
+dfside10min <- dfside10min%>%
+  filter(fishPositionLR == "Right")%>%
+  mutate(part = factor(part, levels = c("Before", "After")))
+
+
+
+mean <- dfside10min%>%
+  group_by(part,treatment) %>%
+  summarise(
+    avg=mean(ratioside, na.rm=TRUE),
+    sd=sd(ratioside, na.rm=TRUE),
+    n=n()-sum(is.na(ratioside)),
+    se = sd / sqrt(n))
+
+p <- ggplot()
+p <- p + geom_point(data = dfside10min,
+                    mapping = aes(x=part, y=ratioside, fill= part),
+                    color="black", shape=21, size=1.5, alpha=0.3,
+                    position=position_jitterdodge(dodge.width=0.5, jitter.width = 0.1),
+                    na.rm = TRUE)+
+  scale_fill_manual(values = c("white", "lightblue"))
+  # Trait reliant les points de chaque poissonp
+  
+p <- p +  geom_line(data = dfside10min,
+                   mapping = aes(x = part, y = ratioside, group = fish),
+                   color = "gray50", alpha = 0.4)
+
+p <- p + geom_point(data = mean,
+                    mapping = aes (x=part, y=avg, fill= part),
+                    position = position_dodge(0.5),
+                    size=4, shape=21, color="black")
+
+p <- p +  geom_line(data = mean,
+                   mapping = aes(x = part, y = avg, group = 1),
+                   color = "gray50", alpha = 0.6, size = 1)
+
+p <- p + geom_errorbar(data = mean,
+                       mapping = aes(x=part, ymin=avg-sd, ymax=avg+sd, group= part),
+                       width = 0.1,
+                       position = position_dodge(0.5),
+                       color="black")
+p <- p + geom_ribbon(data = mean,
+                     mapping = aes(x = part,
+                                   ymin = avg - sd,
+                                   ymax = avg + sd,
+                                   group = 1),
+                     fill = "gray70",
+                     alpha = 0.3)
+p <- p + geom_abline(intercept = 50, slope = 0,linetype = "dashed", color ="red")
+p <- p + labs(x ="Minutes", y = "Time in the Right %")
+p <- p + theme(
+  panel.border = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  axis.line = element_line(colour = "black"),
+  panel.background = element_blank(),
+  legend.position = "none",
+  axis.text.x=element_text(colour="black"),
+  axis.text.y=element_text(colour="black")
+)
+p <- p + facet_wrap(~treatment) 
+p
+```
+
+
+
+##cue 10min
+```{r}
+library(dplyr)
+
+
+# Calculer le total du timelag par groupe
+timecue10min <- dataF %>%
+  group_by(fish, fishPositionCue, part, cue_side, treatment) %>%
+  summarise(sum = sum(timelag, na.rm = TRUE), .groups = "drop")
+
+# Ajouter les combinaisons manquantes avec sum = 0 si nécessaire (optionnel, uncommenter si besoin)
+# timecue10min <- timecue10min %>%
+#   complete(fish, fishPositionCue, part, cue_side, treatment, fill = list(sum = 0))
+
+# Calculer le total_sum par fish, part, cue_side et treatment
+dfcue10min <- timecue10min %>%
+  group_by(fish, part, cue_side, treatment) %>%
+  mutate(total_sum = sum(sum)) %>%
+  ungroup()
+
+# Calculer le ratio en % pour chaque côté
+dfcue10min <- dfcue10min %>%
+  group_by(fish, part, fishPositionCue, cue_side, treatment) %>%
+  mutate(ratioside = ifelse(sum == 0, 0, 100 * sum / total_sum)) %>%
+  ungroup()
+
+# Filtrer uniquement les positions cue et définir les niveaux de part
+dfcue10min <- dfcue10min %>%
+  filter(fishPositionCue == "cue") %>%
+  mutate(part = factor(part, levels = c("Before", "After")))
+
+# Calcul des moyennes, écarts-types, tailles d'échantillons et erreurs standard
+mean_stats <- dfcue10min %>%
+  group_by(part, treatment) %>%
+  summarise(
+    avg = mean(ratioside, na.rm = TRUE),
+    sd = sd(ratioside, na.rm = TRUE),
+    n = sum(!is.na(ratioside)),
+    se = sd / sqrt(n),
+    .groups = "drop"
+  )
+
+# Plot avec ggplot2
+p <- ggplot() +
+  geom_point(data = dfcue10min,
+             aes(x = part, y = ratioside, fill = part),
+             color = "black", shape = 21, size = 1.5, alpha = 0.3,
+             position = position_jitterdodge(dodge.width = 0.5, jitter.width = 0.1),
+             na.rm = TRUE) +
+  scale_fill_manual(values = c("Before" = "white", "After" = "lightblue")) +
+  geom_line(data = dfcue10min,
+            aes(x = part, y = ratioside, group = fish),
+            color = "gray50", alpha = 0.4) +
+  geom_point(data = mean_stats,
+             aes(x = part, y = avg, fill = part),
+             position = position_dodge(0.5), size = 4, shape = 21, color = "black") +
+  geom_line(data = mean_stats,
+            aes(x = part, y = avg, group = 1),
+            color = "gray50", alpha = 0.6, size = 1) +
+  geom_errorbar(data = mean_stats,
+                aes(x = part, ymin = avg - se, ymax = avg + se, group = part),
+                width = 0.1,
+                position = position_dodge(0.5),
+                color = "black") +
+  geom_ribbon(data = mean_stats,
+              aes(x = part,
+                  ymin = avg - se,
+                  ymax = avg + se,
+                  group = 1),
+              fill = "gray70",
+              alpha = 0.3) +
+  geom_abline(intercept = 50, slope = 0, linetype = "dashed", color = "red") +
+  labs(x = "Temps (min)", y = "% de temps passé dans la molécule") +
+  scale_fill_manual(values = c("Before" = "#F8766D", "After" = "#00BFC4")) +
+  theme(
+    panel.border = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black"),
+    panel.background = element_blank(),
+    legend.position = "none",
+    axis.text.x = element_text(colour = "black"),
+    axis.text.y = element_text(colour = "black")
+  ) +
+  facet_wrap(~treatment)
+
+print(p)
+
+# Préparation des données pour test statistique (paire)
+paired_data <- dfcue10min %>%
+  filter(part %in% c("Before", "After")) %>%
+  select(fish, part, ratioside, treatment) %>%
+  pivot_wider(names_from = part, values_from = ratioside) %>%
+  mutate(diff = Before - After)
+
+# Test statistique par traitement (test de normalité + test apparié)
+results <- paired_data %>%
+  group_by(treatment) %>%
+  summarise(
+    shapiro_p = shapiro.test(diff)$p.value,
+    test_p = if (shapiro_p > 0.05) {
+      t.test(Before, After, paired = TRUE)$p.value
+    } else {
+      wilcox.test(Before, After, paired = TRUE)$p.value
+    },
+    .groups = "drop"
+  )
+
+print(results)
+
+# Test de différence de l'effet (différence Before-After) entre traitements
+# Créer la variable diff
+paired_data <- paired_data %>%
+  mutate(diff = Before - After)
+
+# Test t de comparaison des différences entre traitements
+t_test_result <- t.test(diff ~ treatment, data = paired_data)
+
+print(t_test_result)
+
+# Welch's t-test
+
+mean_stats %>% filter(treatment == "C8AHL")
+mean_stats %>% filter(treatment == "C8DMS0")
+
+```
+
+```{r}
+# calcul si un poisson passe plus de 50% dans un cue on le compte comme attiré et on compare
+count <- dfcue10min %>%
+  mutate(attracted = ifelse(ratioside > 50, 1, 0))%>%
+  mutate(repulsed = 1-attracted )
+
+sumcount <- count %>%
+  group_by(treatment,part)%>%
+  summarise(sumattracted = sum(attracted),
+            sumrepulsed = sum(repulsed))%>%
+  mutate(sumattracted = 100 *sumattracted/(sumattracted+sumrepulsed),
+         sumrepulsed = 100 * sumattracted/(sumattracted+sumrepulsed))
+
+sumcount <- sumcount %>%
+  filter(part == "After")
+
+ggplot(sumcount, aes(x = treatment, y = sumattracted, fill = part)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_abline(intercept = 50, slope = 0, linetype = "dashed", color = "red") +
+  theme_classic()
+
+```
+
+```{r}
+ratioratioCue <- dfcue10min %>%
+  group_by(fish,cue_side) %>%
+  summarise(
+    pente = ratioside[part == "Before"] / ratioside[part == "After"]
+  )
+
+ratioratioCue <- ratioratioCue %>%
+  filter(fish != "13")
+  
+
+p = ggplot(ratioratioCue, aes(x = fish, y = pente)) + # visualise time series
+  geom_point(aes(col = cue_side))+
+  geom_abline(intercept = 1, slope = 0,linetype = "dashed", color ="red")+
+  theme_classic()
+p
+```
+
+```{r}
+library("readxl") # Load Excel tables
+library("ggplot2") # Data viz
+library("lme4") # Mixed effects modeling
+library("performance") # Check model performance
+library ("bestNormalize") # Calculate and perform best normalizing transformation
+library("car") # Check Model F and Chi2 stats
+library("effects") # Checking and Visualizing Mixed Effects
+library("fitdistrplus")  ## for checking data distributions
+library("DHARMa")  ## for simulated residuals function and for testing dispersion of the model
+library("multcomp") # for model posthoc tests
+library("ggeffects") # for the ggpredict function
+library("MuMIn") # for glm r²
+library("lmtest") # for likelihood ratio tests
+library("ggpol") # for the half boxplot half data points
+library("dplyr") # for data calculations
+library(MuMIn)
+
+dfcue10min <- dfcue10min%>%
+  mutate(part = factor(part, levels = c("Before", "After")))
+
+
+descdist(as.numeric(na.exclude(dfcue1min$sum)), boot = 1000, discrete = FALSE)
+
+
+#on test le model normal
+model <- lm(formula = sum ~ part, data = dfcue1min)
+
+qqnorm(resid(model))  # Trace le QQ-plot
+qqline(resid(model)) # not amazing
+hist(resid(model)) # again distribution not perfect
+plot(resid(model)) # not spreaded well on top
+testDispersion(model)
+simulationOutput <- simulateResiduals(fittedModel = model, plot = T)
+# pas ouf
+
+summary(model)
+anova(model)
+Anova(model)
+r.squaredGLMM(model)
+
+library(emmeans)
+```
+
+##speed analysis
+```{r}
+## speed analysis
+speedA <- dataF %>%
+  group_by(fish, secondeTEST, part, minute, treatment) %>%
+  summarise(speedsec = median(speed_mm_per_sec, na.rm = TRUE))
+
+mean <- speedA %>%
+  group_by(fish, treatment, part, minute) %>%
+  summarise(
+    m1 = mean(speedsec, na.rm = TRUE),
+    sd = sd(speedsec, na.rm = TRUE),
+    n = n() - sum(is.na(speedsec)),
+    se = sd / sqrt(n)
+  ) %>%
+  mutate(treatment_part = paste(treatment, sep = "_"))
+
+mean2 <- mean %>%
+  group_by(part, treatment, minute) %>%
+  summarise(
+    avg = mean(m1, na.rm = TRUE),
+    sd = sd(m1, na.rm = TRUE),
+    n = n() - sum(is.na(m1)),
+    se = sd / sqrt(n)
+  ) %>%
+  mutate(treatment = paste(treatment,sep = "_"))
+
+## speed analysis
+
+
+# Calcul vitesse par poisson, part, minute, treatment
+speedA <- dataF %>%
+  group_by(fish, secondeTEST, part, minute, treatment) %>%
+  summarise(speedsec = median(speed_mm_per_sec, na.rm = TRUE), .groups = "drop")
+
+# Moyenne par poisson, treatment, part, minute
+mean <- speedA %>%
+  group_by(fish, treatment, part, minute) %>%
+  summarise(
+    m1 = mean(speedsec, na.rm = TRUE),
+    sd = sd(speedsec, na.rm = TRUE),
+    n = n() - sum(is.na(speedsec)),
+    se = sd / sqrt(n),
+    .groups = "drop"
+  ) %>%
+  mutate(treatment_part = paste(treatment, fish, part, sep = "_"),
+         treatment_simple = treatment)
+
+# Moyenne globale par treatment, part, minute
+mean2 <- mean %>%
+  group_by(part, treatment, minute) %>%
+  summarise(
+    avg = mean(m1, na.rm = TRUE),
+    sd = sd(m1, na.rm = TRUE),
+    n = n() - sum(is.na(m1)),
+    se = sd / sqrt(n),
+    .groups = "drop"
+  ) %>%
+  mutate(treatment_part = paste(treatment, part, sep = "_"),
+         treatment_simple = treatment)
+
+# Couleurs uniquement par traitement simple
+colors_simple <- c(
+  "C8AHL" = "#879BFF",  
+  "DMSO" = "#DCDCDC"    
+)
+
+p <- ggplot() +
+  geom_point(data = mean,
+             aes(x = minute, y = m1, fill = treatment_simple),
+             color = "black", shape = 21, size = 1.5, alpha = 0.3,
+             position = position_jitterdodge(dodge.width = 0.5, jitter.width = 0.1),
+             na.rm = TRUE) +
+  geom_point(data = mean2,
+             aes(x = minute, y = avg, fill = treatment_simple),
+             position = position_dodge(0.5),
+             size = 4, shape = 21, color = "black") +
+  geom_errorbar(data = mean2,
+                aes(x = minute, ymin = avg - sd, ymax = avg + sd, group = treatment_simple),
+                width = 0.1,
+                position = position_dodge(0.5),
+                color = "black") +
+  geom_abline(intercept = 50, slope = 0, linetype = "dashed", color = "red") +
+  geom_vline(xintercept = 10, linetype = "dashed", color = "red") +
+  labs(x = "Temps (min)", y = "Vitesse de nage des poissons (mm/s)") +
+  scale_fill_manual(values = colors_simple, breaks = names(colors_simple)) +
+  guides(fill = guide_legend(title = "Traitement")) +
+  theme_classic() +
+  theme(
+    panel.border = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black"),
+    panel.background = element_blank(),
+    legend.position = "left",
+    axis.text.x = element_text(colour = "black"),
+    axis.text.y = element_text(colour = "black")
+  )
+
+print(p)
+
+# représentation en boxplot
+
+ggplot(mean, aes(x = treatment, y = m1, fill = part)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_abline(intercept = 50, slope = 0, linetype = "dashed", color = "red") +
+  theme_classic()
+
+
+# Test stat
+
+diff_data <- mean %>%
+  group_by(treatment, fish, part) %>%
+  summarise(mean_speed = mean(m1, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = part, values_from = mean_speed) %>%
+  mutate(diff = After - Before)
+
+results <- diff_data %>%
+  group_by(treatment) %>%
+  summarise(
+    shapiro_p = shapiro.test(diff)$p.value,
+    test_p = if(shapiro_p > 0.05) {
+      t.test(Before, After, paired = TRUE)$p.value
+    } else {
+      wilcox.test(Before, After, paired = TRUE)$p.value
+    }
+  )
+
+print(results)
+
+# Pour chaque traitement, je fais un  jeu de données avec diff Before-After par poisson
+diff_data <- mean %>%
+  group_by(treatment, fish, part) %>%
+  summarise(mean_speed = mean(m1, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = part, values_from = mean_speed) %>%
+  mutate(diff = Après - Avant)
+
+# Test par traitement
+results <- diff_data %>%
+  group_by(treatment) %>%
+  summarise(
+    shapiro_p = shapiro.test(diff)$p.value,
+    t.test_p = t.test(Après, Avant, paired = TRUE)$p.value
+  )
+
+print(results) # significatif pour DMSO 
+
+summary_diff <- diff_data %>%
+  group_by(treatment) %>%
+  summarise(
+    mean_diff = mean(diff, na.rm = TRUE),
+    direction = ifelse(mean_diff > 0, "augmentation", "baisse")
+  )
+
+print(summary_diff)
+
+# Test effet du temps et effet du traitement sur la vitesse 
+library(lme4)
+mean$treatment <- as.factor(mean$treatment)
+mean$treatment <- relevel(mean$treatment, ref = "C8DMS0")
+
+mod_mixed <- lmer(m1 ~ minute * treatment + (1 | fish), data = mean) 
+summary(mod_mixed)
+```
+
